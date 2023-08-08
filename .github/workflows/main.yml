@@ -1,60 +1,75 @@
-name: Publish And Deploy Demo
+name: Build and Release
+
+# 定义本Action需要对仓库中的文件进行写操作的权限。
+permissions:
+  contents: write
+
+# 推送的tag中以v开头则执行此action
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
+  build-release:
+    runs-on: "ubuntu-latest"
     steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v3
 
-    # 下载源码
-    - name: Checkout
-      uses: actions/checkout@master
+      # 设置node版本
+      - name: "Set up Node.js"
+        uses: actions/setup-node@v3
+        with:
+          node-version: '14.18.0'
+      # 安装依赖
+      - name: "Install dependencies"
+        run: npm install
+      # 执行构建命令
+      - name: "Install dependencies"
+        run: npm run build-rollup:prod
+      # 将dist目录打成zip包
+      - name: Zip Dist
+        run: zip -r dist.zip dist
+      # 创建Release
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          draft: false
+          prerelease: false
+      # 上传zip包
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./dist.zip
+          asset_name: js-screen-shot-dist.zip
+          asset_content_type: application/zip
 
-    # 打包构建
-    - name: Build
-      uses: actions/setup-node@master
-    - run: npm install
-    - run: npm run build
-    - run: tar -zcvf release.tgz .nuxt static nuxt.config.js package.json package-lock.json pm2.config.json
 
-    # 发布 Release
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@master
-      env:
-        GITHUB_TOKEN: ${{ secrets.TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: false
+  create-changelog:
+    runs-on: ubuntu-latest
+    # 需要等build结束后才执行此处
+    needs: build-release
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-    # 上传构建结果到 Release
-    - name: Upload Release Asset
-      id: upload-release-asset
-      uses: actions/upload-release-asset@master
-      env:
-        GITHUB_TOKEN: ${{ secrets.TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./release.tgz
-        asset_name: release.tgz
-        asset_content_type: application/x-tgz
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16.x
 
-    # 部署到服务器
-    - name: Deploy
-      uses: appleboy/ssh-action@master
-      with:
-        host: ${{ secrets.HOST }}
-        username: ${{ secrets.USERNAME }}
-        password: ${{ secrets.PASSWORD }}
-        port: ${{ secrets.PORT }}
-        script: |
-          cd /root/realworld-nuxtjs
-          wget https://github.com/caijuan02/realworld-nuxtjs/releases/latest/download/release.tgz -O release.tgz
-          tar zxvf release.tgz
-          npm install --production
-          pm2 reload pm2.config.json
+      # 生成版本更新日志
+      - run: npx changelogithub
+        env:
+          GITHUB_TOKEN: ${{secrets.TOKEN}}
+
+
